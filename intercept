@@ -1,0 +1,68 @@
+#include <linux/module.h>
+#include <linux/kernel.h>
+#include <asm-i386/current.h>
+#include <linux/syscall.h>
+#include <linux/utsname.h>
+#include <linux/unistd.h>
+
+MODULE_LICENSE("GPL");
+MODULE_AUTHOR("Guy Sadoun");
+
+// arg default
+char* program_name = NULL;
+int range = 4;
+
+//declarations
+asmlinkage long our_sys__kill(int pid, int sig);
+
+// command-line arguments
+MODULE_PARM(range, "i");
+MODULE_PARM(program_name, "s");
+
+// global vars
+void** sys_call_table;
+int found = 0;
+asmlinkage int (*original_sys_read)(unsigned int, char*, size_t) = &sys_read;
+asmlinkage long (*original_sys_kill)(int pid, int sig) = &sys_kill;
+long (*intercept_sys_kill)(int pid, int sig);
+
+long our_sys_kill(int pid, int sig){
+    struct task_struct *p;
+    p = find_task_by_pid(pid);
+    if (p){
+        if(sig == SIGKILL && strcmp(p->comm, program_name)==0) {
+            return -EPERM;
+        }
+    }
+    return original_sys_kill(pid, sig);
+}
+
+void find_sys_call_table(int scan_range) {
+    void* uts = &system_utsname;
+    void** start = &uts;
+    void** it = *start;
+    int i;
+    for ( i=0 ; i < scan_range ; i+=4){
+        if (*it == &sys_read) {
+            sys_call_table = it - __NR_read;
+            found = 1;
+            return;
+        }
+        it++;
+    }
+}
+
+int init_module(void) {
+    found = 0;
+    while (!found) {
+        find_sys_call_table(range);
+        range*=2;
+    }
+    intercept_sys_kill = our_sys_kill;
+    sys_call_table[__NR_kill] = intercept_sys_kill;
+    return 0;
+}
+
+void cleanup_module(void) {
+    sys_call_table[__NR_kill] = original_sys_kill;
+}
